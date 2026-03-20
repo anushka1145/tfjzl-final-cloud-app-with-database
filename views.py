@@ -1,29 +1,26 @@
-from django.shortcuts import render, get_object_or_404, redirect
+from django.shortcuts import render, get_object_or_404
 from django.http import HttpResponseRedirect
 from django.urls import reverse
 from .models import Question, Choice, Submission, Course, Enrollment
 
 def submit(request, course_id):
     course = get_object_or_404(Course, pk=course_id)
-    # Get the user's enrollment for this course
+    # Ensure enrollment exists for the user
     enrollment = get_object_or_404(Enrollment, user=request.user, course=course)
     
     if request.method == 'POST':
-        # Create a new submission instance
+        # Create a new submission object
         submission = Submission(enrollment=enrollment)
         submission.save()
         
-        # Loop through all questions in the course
-        questions = Question.objects.filter(lesson__course=course)
-        for question in questions:
-            # Get the selected choice ID from the radio button input
-            selected_choice_id = request.POST.get(f'question_{question.id}')
-            if selected_choice_id:
-                selected_choice = get_object_or_404(Choice, pk=selected_choice_id)
-                submission.choices.add(selected_choice)
+        # Get all question IDs from the post data to associate choices
+        for key, value in request.POST.items():
+            if key.startswith('question_'):
+                choice_id = int(value)
+                choice = get_object_or_404(Choice, pk=choice_id)
+                submission.choices.add(choice)
         
         submission.save()
-        # Redirect to the results page passing the submission ID
         return HttpResponseRedirect(reverse('onlinecourse:show_exam_result', args=(course.id, submission.id)))
 
 def show_exam_result(request, course_id, submission_id):
@@ -31,17 +28,32 @@ def show_exam_result(request, course_id, submission_id):
     course = get_object_or_404(Course, pk=course_id)
     submission = get_object_or_404(Submission, pk=submission_id)
     
-    # Calculate score logic
-    total_questions = Question.objects.filter(lesson__course=course).count()
-    correct_answers = submission.choices.filter(is_correct=True).count()
+    # 1. Implementation of the logic required by is_get_score()
+    total_score = 0
+    possible_score = 0
     
-    score = (correct_answers / total_questions) * 100 if total_questions > 0 else 0
+    # Get all questions related to this course
+    questions = Question.objects.filter(lesson__course=course)
     
+    # Get IDs of choices the user actually selected
+    selected_ids = [choice.id for choice in submission.choices.all()]
+    
+    for question in questions:
+        possible_score += question.grade
+        # Check if the selected choice for this question is correct
+        selected_choice = submission.choices.filter(question=question).first()
+        if selected_choice and selected_choice.is_correct:
+            total_score += question.grade
+
+    # 2. Calculate the grade percentage
+    grade = (total_score / possible_score * 100) if possible_score > 0 else 0
+    
+    # 3. Pass all required values to the context
     context['course'] = course
     context['submission'] = submission
-    context['score'] = round(score, 2)
+    context['total_score'] = total_score
+    context['possible_score'] = possible_score
+    context['selected_ids'] = selected_ids  # Required for highlighting in template
+    context['grade'] = grade                # Required for 'Congratulations' logic
     
-    # Task 7 requirement: Pass a success flag for the 'Congratulations' message
-    context['passed'] = score >= 70  # Assuming 70% is the pass mark from your criteria
-    
-    return render(request, 'onlinecourse/exam_result.html', context)
+    return render(request, 'onlinecourse/exam_result_bootstrap.html', context)
